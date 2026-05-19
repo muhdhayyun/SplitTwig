@@ -16,7 +16,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS groups (
                 group_id INTEGER PRIMARY KEY,
                 name     TEXT,
-                currency TEXT NOT NULL DEFAULT 'USD'
+                currency TEXT NOT NULL DEFAULT 'SGD'
             );
             CREATE TABLE IF NOT EXISTS members (
                 user_id      INTEGER NOT NULL,
@@ -66,6 +66,21 @@ def ensure_member(group_id: int, user_id: int, username: str, display_name: str)
                    display_name = excluded.display_name""",
             (user_id, group_id, username, display_name),
         )
+        # Merge any manual placeholder that matches this username (with or without @)
+        if username:
+            manual = c.execute(
+                """SELECT user_id FROM members
+                   WHERE group_id = ? AND user_id < 0
+                   AND (LOWER(display_name) = LOWER(?) OR LOWER(display_name) = LOWER(?))""",
+                (group_id, username, f"@{username}"),
+            ).fetchone()
+            if manual:
+                old_id = manual["user_id"]
+                c.execute("UPDATE expense_splits SET user_id = ? WHERE user_id = ?", (user_id, old_id))
+                c.execute("UPDATE expenses SET paid_by = ? WHERE paid_by = ? AND group_id = ?", (user_id, old_id, group_id))
+                c.execute("UPDATE settlements SET from_user = ? WHERE from_user = ? AND group_id = ?", (user_id, old_id, group_id))
+                c.execute("UPDATE settlements SET to_user = ? WHERE to_user = ? AND group_id = ?", (user_id, old_id, group_id))
+                c.execute("DELETE FROM members WHERE user_id = ? AND group_id = ?", (old_id, group_id))
 
 
 def get_members(group_id: int) -> list:
@@ -73,6 +88,32 @@ def get_members(group_id: int) -> list:
         return c.execute(
             "SELECT * FROM members WHERE group_id = ?", (group_id,)
         ).fetchall()
+
+
+def add_manual_member(group_id: int, display_name: str) -> bool:
+    """Add a member by name only. Returns False if name already exists."""
+    with _conn() as c:
+        existing = c.execute(
+            "SELECT 1 FROM members WHERE group_id = ? AND LOWER(display_name) = LOWER(?)",
+            (group_id, display_name),
+        ).fetchone()
+        if existing:
+            return False
+        # Use negative IDs for manual members so they never clash with Telegram user IDs
+        row = c.execute(
+            "SELECT MIN(user_id) AS min_id FROM members WHERE group_id = ?", (group_id,)
+        ).fetchone()
+        min_id = row["min_id"] if row["min_id"] is not None else 0
+        new_id = min(min_id - 1, -1)
+        c.execute(
+            "INSERT INTO groups (group_id, name) VALUES (?, 'Group') ON CONFLICT DO NOTHING",
+            (group_id,),
+        )
+        c.execute(
+            "INSERT INTO members (user_id, group_id, username, display_name) VALUES (?, ?, '', ?)",
+            (new_id, group_id, display_name),
+        )
+    return True
 
 
 # ── Expenses ───────────────────────────────────────────────────────────────────
@@ -156,6 +197,38 @@ def get_balances(group_id: int) -> tuple[dict, dict]:
     return balances, members
 
 
+def get_expense_breakdown(group_id: int, debtor_id: int, creditor_id: int) -> list:
+    """Expenses where creditor paid and debtor was a split participant."""
+    with _conn() as c:
+        return c.execute(
+            """SELECT e.description, es.share
+               FROM expenses e
+               JOIN expense_splits es ON e.id = es.expense_id
+               WHERE e.group_id = ? AND e.paid_by = ? AND es.user_id = ?
+               ORDER BY e.created_at ASC""",
+            (group_id, creditor_id, debtor_id),
+        ).fetchall()
+
+
+def get_recent_settlements(group_id: int, limit: int = 10) -> list:
+    with _conn() as c:
+        return c.execute(
+            """SELECT from_user, to_user, amount, created_at
+               FROM settlements WHERE group_id = ?
+               ORDER BY created_at DESC LIMIT ?""",
+            (group_id, limit),
+        ).fetchall()
+
+
+def get_settled_amount(group_id: int, from_user: int, to_user: int) -> float:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT COALESCE(SUM(amount), 0.0) AS total FROM settlements WHERE group_id = ? AND from_user = ? AND to_user = ?",
+            (group_id, from_user, to_user),
+        ).fetchone()
+        return row["total"] if row else 0.0
+
+
 def simplify_debts(balances: dict) -> list[tuple]:
     """Greedy debt simplification. Returns [(debtor_id, creditor_id, amount)]."""
     creditors = sorted(
@@ -201,7 +274,7 @@ def get_currency(group_id: int) -> str:
         row = c.execute(
             "SELECT currency FROM groups WHERE group_id = ?", (group_id,)
         ).fetchone()
-        return row["currency"] if row else "USD"
+        return row["currency"] if row else "SGD"
 
 
 def set_currency(group_id: int, currency: str):

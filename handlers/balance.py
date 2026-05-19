@@ -1,7 +1,13 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from db import add_settlement, ensure_member, get_balances, get_currency, simplify_debts
+from db import add_settlement, ensure_member, get_balances, get_currency, get_expense_breakdown, get_settled_amount, simplify_debts
+
+
+def esc(text: str) -> str:
+    for ch in ("_", "*", "[", "`"):
+        text = text.replace(ch, f"\\{ch}")
+    return text
 
 
 async def balance_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -25,10 +31,19 @@ async def balance_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         creditor = members.get(creditor_id)
         if not debtor or not creditor:
             continue
-        dname = debtor["display_name"] or debtor["username"] or f"User {debtor_id}"
-        cname = creditor["display_name"] or creditor["username"] or f"User {creditor_id}"
+        dname = esc(debtor["display_name"] or debtor["username"] or f"User {debtor_id}")
+        cname = esc(creditor["display_name"] or creditor["username"] or f"User {creditor_id}")
 
         lines.append(f"• *{dname}* owes *{cname}* {currency}{amount:.2f}")
+        breakdown = get_expense_breakdown(group_id, debtor_id, creditor_id)
+        settled_pool = get_settled_amount(group_id, debtor_id, creditor_id)
+        for row in breakdown:
+            if settled_pool >= row["share"] - 0.005:
+                icon = "✅"
+                settled_pool -= row["share"]
+            else:
+                icon = "⏳"
+            lines.append(f"  ↳ {icon} {currency}{row['share']:.2f} — {esc(row['description'])}")
         keyboard.append([
             InlineKeyboardButton(
                 f"💸 {dname} → {cname}: {currency}{amount:.2f}",

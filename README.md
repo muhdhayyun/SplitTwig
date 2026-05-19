@@ -1,6 +1,6 @@
-# SplitBot — Telegram Expense Splitter
+# SplitTwig — Telegram Expense Splitter
 
-A personal Splitwise-style Telegram bot. Track shared expenses, split bills, and settle up — all inside Telegram.
+Telegram bot for splitting expenses in group chats — track who paid, who owes, and settle up easily.
 
 ## Setup
 
@@ -9,8 +9,9 @@ A personal Splitwise-style Telegram bot. Track shared expenses, split bills, and
 2. Send `/newbot`, follow the prompts, copy the token
 
 ### 2. Disable Privacy Mode (required for group chats)
-In BotFather: `/setprivacy` → select your bot → **Disable**
-This lets the bot read messages needed for the multi-step `/add` flow.
+In BotFather: `/mybots` → select your bot → **Bot Settings → Group Privacy → Turn off**
+
+This lets the bot read plain text messages needed for the multi-step `/add` flow.
 
 ### 3. Install & Configure
 ```
@@ -32,8 +33,9 @@ python bot.py
 
 ## First Use in a Group
 
-1. Add the bot to your Telegram group
+1. Add **SplitTwig** to your Telegram group and make it an admin
 2. **Everyone** sends `/start` once — this registers them so they appear in expense splits
+3. You can also add someone manually with `/addmember Name` if they haven't messaged the bot yet
 
 ## Commands
 
@@ -41,29 +43,18 @@ python bot.py
 |---|---|
 | `/add` | Guided expense flow with buttons |
 | `/add 45 dinner` | Quick add — skips to member selection |
-| `/balance` | Show who owes whom with Settle buttons |
-| `/history` | Last 10 expenses with Delete buttons |
+| `/balance` | Show who owes whom with itemised breakdown |
+| `/history` | Recent expenses and payments |
 | `/members` | List registered members |
+| `/addmember Name` | Manually add a member by name |
 | `/paid @username 30` | Record a manual payment |
-| `/currency MYR` | Set group currency (default: USD) |
+| `/currency SGD` | Set group currency (default: SGD) |
+| `/cancel` | Cancel the current action |
 | `/help` | Show all commands |
 
-## Moving to Another Laptop
+## Moving to Another Machine
 
-The database is `data.db` — it's tracked by git intentionally.
-
-**Before switching machines:**
-```
-git add data.db
-git commit -m "sync db"
-git push
-```
-
-**On the other laptop:**
-```
-git pull
-python bot.py
-```
+The database is `data.db` — copy or sync it to carry your expense history across machines.
 
 > Only run one instance at a time. Telegram rejects duplicate token connections.
 
@@ -71,4 +62,4 @@ python bot.py
 
 - `.env` is gitignored — your bot token is never committed
 - Each Telegram group has its own isolated expense pool
-- The bot works in private chats (1-on-1) and group chats
+- When a manually added member later joins and types `/start`, their placeholder is automatically merged with their real Telegram account

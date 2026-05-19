@@ -26,16 +26,22 @@ or: /paid @username 30
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    ensure_member(
-        update.effective_chat.id,
-        user.id,
-        user.username or "",
-        user.full_name,
-    )
-    await update.message.reply_text(
-        f"👋 Hey {user.first_name}, welcome to SplitBot!\n\n{HELP_TEXT}",
-        parse_mode="Markdown",
-    )
+    chat = update.effective_chat
+    ensure_member(chat.id, user.id, user.username or "", user.full_name)
+
+    is_group = chat.type in ("group", "supergroup")
+    if is_group:
+        await update.message.reply_text(
+            f"👋 *{user.first_name}* has joined SplitBot!\n\n"
+            "Everyone who wants to be included in expense splits must type /start once to register.\n\n"
+            f"{HELP_TEXT}",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            f"👋 Hey {user.first_name}, welcome to SplitBot!\n\n{HELP_TEXT}",
+            parse_mode="Markdown",
+        )
 
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

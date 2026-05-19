@@ -1,3 +1,5 @@
+import logging
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     CallbackQueryHandler,
@@ -10,6 +12,14 @@ from telegram.ext import (
 
 from db import add_expense, ensure_member, get_currency, get_members
 
+logger = logging.getLogger(__name__)
+
+
+def esc(text: str) -> str:
+    """Escape Markdown special characters in user-provided strings."""
+    for ch in ("_", "*", "[", "`"):
+        text = text.replace(ch, f"\\{ch}")
+    return text
 AMOUNT, DESCRIPTION, MEMBERS = range(3)
 
 
@@ -17,6 +27,7 @@ async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     group_id = update.effective_chat.id
     ensure_member(group_id, user.id, user.username or "", user.full_name)
+    logger.info("add_start: user=%s (%s) group=%s args=%s", user.id, user.username, group_id, context.args)
 
     # Quick-add: /add 45 dinner
     args = context.args
@@ -29,6 +40,7 @@ async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["add"] = {"amount": amount, "description": description}
             return await _show_members(update, context)
         except ValueError:
+            logger.warning("add_start: invalid quick-add args %s", args)
             pass
 
     await update.message.reply_text("💰 How much did you pay?\n_(e.g. `45` or `12.50`)_", parse_mode="Markdown")
@@ -120,12 +132,15 @@ async def confirm_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = context.user_data.get("add")
     if not data:
+        logger.warning("confirm_add: no session data for user=%s", update.effective_user.id)
         await query.edit_message_text("❌ Session expired — please start over with /add")
         return ConversationHandler.END
 
     selected = list(data["selected"])
     user = update.effective_user
     group_id = update.effective_chat.id
+    logger.info("confirm_add: user=%s group=%s amount=%s desc=%s selected=%s",
+                user.id, group_id, data.get("amount"), data.get("description"), selected)
 
     # Require at least one OTHER person
     others = [uid for uid in selected if uid != user.id]
@@ -133,7 +148,12 @@ async def confirm_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Select at least one other person to split with!", show_alert=True)
         return MEMBERS
 
-    expense_id = add_expense(group_id, user.id, data["amount"], data["description"], selected)
+    try:
+        expense_id = add_expense(group_id, user.id, data["amount"], data["description"], selected)
+    except Exception:
+        logger.exception("confirm_add: failed to save expense")
+        await query.edit_message_text("❌ Failed to save expense — check the bot logs.")
+        return ConversationHandler.END
 
     currency = get_currency(group_id)
     n = len(selected)
@@ -141,13 +161,13 @@ async def confirm_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     members = {m["user_id"]: m for m in get_members(group_id)}
     other_names = ", ".join(
-        (members[uid]["display_name"] or members[uid]["username"] or f"User {uid}")
+        esc(members[uid]["display_name"] or members[uid]["username"] or f"User {uid}")
         for uid in others
         if uid in members
     )
 
     text = (
-        f"✅ *{user.full_name}* paid *{currency}{data['amount']:.2f}* for _{data['description']}_\n"
+        f"✅ *{esc(user.full_name)}* paid *{currency}{data['amount']:.2f}* for _{esc(data['description'])}_\n"
         f"Split {n} ways ({currency}{share:.2f} each)"
     )
     if other_names:
@@ -186,6 +206,7 @@ add_handler = ConversationHandler(
         ],
     },
     fallbacks=[CommandHandler("cancel", cancel_command)],
+    allow_reentry=True,
     per_chat=True,
     per_user=True,
 )

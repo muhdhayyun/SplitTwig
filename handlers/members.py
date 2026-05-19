@@ -1,7 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from db import ensure_member, get_currency, get_members, set_currency
+from db import add_manual_member, ensure_member, get_currency, get_members, set_currency
 
 
 async def members_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -19,6 +19,25 @@ async def members_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"• {name}{handle}")
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def addmember_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    group_id = update.effective_chat.id
+
+    if not context.args:
+        await update.message.reply_text("Usage: `/addmember Name`\nExample: `/addmember John`", parse_mode="Markdown")
+        return
+
+    name = " ".join(context.args).strip()
+    if len(name) > 64:
+        await update.message.reply_text("❌ Name is too long (max 64 characters).")
+        return
+
+    added = add_manual_member(group_id, name)
+    if added:
+        await update.message.reply_text(f"✅ *{name}* added to the group.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ A member named *{name}* already exists.", parse_mode="Markdown")
 
 
 async def currency_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
