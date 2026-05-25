@@ -197,10 +197,12 @@ def get_balances(group_id: int) -> tuple[dict, dict]:
     return balances, members
 
 
-def get_expense_breakdown(group_id: int, debtor_id: int, creditor_id: int) -> list:
-    """Expenses where creditor paid and debtor was a split participant."""
+def get_expense_breakdown(group_id: int, debtor_id: int, creditor_id: int) -> tuple[list, list]:
+    """Returns (forward, reverse) expense rows.
+    forward: creditor paid, debtor participated (debtor owes).
+    reverse: debtor paid, creditor participated (offsets the net)."""
     with _conn() as c:
-        return c.execute(
+        forward = c.execute(
             """SELECT e.description, es.share
                FROM expenses e
                JOIN expense_splits es ON e.id = es.expense_id
@@ -208,6 +210,55 @@ def get_expense_breakdown(group_id: int, debtor_id: int, creditor_id: int) -> li
                ORDER BY e.created_at ASC""",
             (group_id, creditor_id, debtor_id),
         ).fetchall()
+        reverse = c.execute(
+            """SELECT e.description, es.share
+               FROM expenses e
+               JOIN expense_splits es ON e.id = es.expense_id
+               WHERE e.group_id = ? AND e.paid_by = ? AND es.user_id = ?
+               ORDER BY e.created_at ASC""",
+            (group_id, debtor_id, creditor_id),
+        ).fetchall()
+        return forward, reverse
+
+
+def get_pairwise_debts(group_id: int) -> tuple[list[tuple], dict]:
+    """Direct per-pair net debts without cross-party simplification.
+    Returns ([(debtor_id, creditor_id, net_amount)], members_dict)."""
+    with _conn() as c:
+        members = {m["user_id"]: m for m in get_members(group_id)}
+        pair: dict[tuple, float] = {}
+
+        for row in c.execute(
+            """SELECT e.paid_by, es.user_id, es.share
+               FROM expenses e JOIN expense_splits es ON e.id = es.expense_id
+               WHERE e.group_id = ?""",
+            (group_id,),
+        ).fetchall():
+            if row["user_id"] != row["paid_by"]:
+                k = (row["user_id"], row["paid_by"])
+                pair[k] = pair.get(k, 0.0) + row["share"]
+
+        for s in c.execute(
+            "SELECT from_user, to_user, amount FROM settlements WHERE group_id = ?",
+            (group_id,),
+        ).fetchall():
+            k = (s["from_user"], s["to_user"])
+            pair[k] = pair.get(k, 0.0) - s["amount"]
+
+        seen: set = set()
+        result = []
+        for a, b in list(pair):
+            if (a, b) in seen or (b, a) in seen:
+                continue
+            seen.add((a, b))
+            seen.add((b, a))
+            net = pair.get((a, b), 0.0) - pair.get((b, a), 0.0)
+            if net > 0.005:
+                result.append((a, b, round(net, 2)))
+            elif net < -0.005:
+                result.append((b, a, round(-net, 2)))
+
+        return result, members
 
 
 def get_recent_settlements(group_id: int, limit: int = 10) -> list:
@@ -218,6 +269,42 @@ def get_recent_settlements(group_id: int, limit: int = 10) -> list:
                ORDER BY created_at DESC LIMIT ?""",
             (group_id, limit),
         ).fetchall()
+
+
+def get_all_settlements(group_id: int) -> list:
+    with _conn() as c:
+        return c.execute(
+            """SELECT from_user, to_user, amount, created_at
+               FROM settlements WHERE group_id = ?
+               ORDER BY created_at ASC""",
+            (group_id,),
+        ).fetchall()
+
+
+def get_all_expenses_with_splits(group_id: int) -> list:
+    """Returns every expense with its splits, oldest first.
+    Each item: {id, paid_by, amount, description, splits: [{user_id, share}, ...]}"""
+    with _conn() as c:
+        expenses = c.execute(
+            """SELECT id, paid_by, amount, description, created_at
+               FROM expenses WHERE group_id = ?
+               ORDER BY created_at ASC""",
+            (group_id,),
+        ).fetchall()
+        result = []
+        for e in expenses:
+            splits = c.execute(
+                "SELECT user_id, share FROM expense_splits WHERE expense_id = ?",
+                (e["id"],),
+            ).fetchall()
+            result.append({
+                "id": e["id"],
+                "paid_by": e["paid_by"],
+                "amount": e["amount"],
+                "description": e["description"],
+                "splits": [{"user_id": s["user_id"], "share": s["share"]} for s in splits],
+            })
+        return result
 
 
 def get_settled_amount(group_id: int, from_user: int, to_user: int) -> float:

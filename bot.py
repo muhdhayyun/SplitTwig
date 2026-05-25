@@ -2,9 +2,11 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+from telegram.error import NetworkError
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram import Update
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -30,6 +32,13 @@ from handlers.history import (
 )
 from handlers.members import addmember_handler, currency_handler, members_handler
 from handlers.misc import help_handler, start_handler
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if isinstance(context.error, NetworkError):
+        logger.warning("Network hiccup (auto-retry): %s", context.error)
+    else:
+        logger.exception("Unhandled error", exc_info=context.error)
 
 
 def main():
@@ -62,7 +71,9 @@ def main():
     app.add_handler(CallbackQueryHandler(delete_confirm_callback, pattern=r"^delok:"))
     app.add_handler(CallbackQueryHandler(delete_cancel_callback,  pattern=r"^delcancel$"))
 
-    logger.info("SplitBot is running")
+    app.add_error_handler(error_handler)
+
+    logger.info("🌱 SplitTwig is running")
     app.run_polling(allowed_updates=["message", "callback_query"])
 
 

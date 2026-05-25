@@ -1,5 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes
+from telegram.helpers import escape_markdown
 
 from db import add_manual_member, ensure_member, get_currency, get_members, set_currency
 
@@ -14,8 +15,8 @@ async def members_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = [f"👥 *Group Members* ({len(members)})  |  Currency: {currency}\n"]
     for m in members:
-        name = m["display_name"] or m["username"] or f"User {m['user_id']}"
-        handle = f" (@{m['username']})" if m["username"] else ""
+        name = escape_markdown(m["display_name"] or m["username"] or f"User {m['user_id']}")
+        handle = f" (@{escape_markdown(m['username'])})" if m["username"] else ""
         lines.append(f"• {name}{handle}")
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
@@ -34,10 +35,11 @@ async def addmember_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     added = add_manual_member(group_id, name)
+    escaped = escape_markdown(name)
     if added:
-        await update.message.reply_text(f"✅ *{name}* added to the group.", parse_mode="Markdown")
+        await update.message.reply_text(f"✅ *{escaped}* added to the group.", parse_mode="Markdown")
     else:
-        await update.message.reply_text(f"❌ A member named *{name}* already exists.", parse_mode="Markdown")
+        await update.message.reply_text(f"❌ A member named *{escaped}* already exists.", parse_mode="Markdown")
 
 
 async def currency_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

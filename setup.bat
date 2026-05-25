@@ -6,5 +6,7 @@ if not exist .env (
     echo Created .env — open it and paste your BOT_TOKEN
 )
 echo.
-echo Setup done. Run: python bot.py
+echo Setup done.
+echo   Run normally:    python bot.py
+echo   Run with reload: powershell -File dev.ps1
 pause

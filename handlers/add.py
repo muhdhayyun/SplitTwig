@@ -23,14 +23,52 @@ def esc(text: str) -> str:
 AMOUNT, DESCRIPTION, MEMBERS = range(3)
 
 
+def _find_member_by_mention(members: list, mention: str):
+    target = mention.lstrip("@").lower()
+    for m in members:
+        uname = (m["username"] or "").lower()
+        dname = (m["display_name"] or "").lower().lstrip("@")
+        if uname == target or dname == target:
+            return m
+    return None
+
+
 async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     group_id = update.effective_chat.id
     ensure_member(group_id, user.id, user.username or "", user.full_name)
     logger.info("add_start: user=%s (%s) group=%s args=%s", user.id, user.username, group_id, context.args)
 
-    # Quick-add: /add 45 dinner
     args = context.args
+
+    # /add @user 45 dinner — log a payment on behalf of another user
+    if args and args[0].startswith("@"):
+        if len(args) < 3:
+            await update.message.reply_text(
+                "Usage: `/add @user 45 dinner`", parse_mode="Markdown"
+            )
+            return ConversationHandler.END
+        members = get_members(group_id)
+        target = _find_member_by_mention(members, args[0])
+        if not target:
+            await update.message.reply_text(f"❌ {args[0]} not found in this group.")
+            return ConversationHandler.END
+        try:
+            amount = float(args[1].replace(",", "."))
+            if amount <= 0:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text(f"❌ Invalid amount: `{args[1]}`", parse_mode="Markdown")
+            return ConversationHandler.END
+        description = " ".join(args[2:])
+        context.user_data["add"] = {
+            "amount": amount,
+            "description": description,
+            "paid_by": target["user_id"],
+        }
+        return await _show_members(update, context)
+
+    # Quick-add: /add 45 dinner
     if args and len(args) >= 2:
         try:
             amount = float(args[0].replace(",", "."))
@@ -139,17 +177,18 @@ async def confirm_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     selected = list(data["selected"])
     user = update.effective_user
     group_id = update.effective_chat.id
-    logger.info("confirm_add: user=%s group=%s amount=%s desc=%s selected=%s",
-                user.id, group_id, data.get("amount"), data.get("description"), selected)
+    paid_by = data.get("paid_by", user.id)
+    logger.info("confirm_add: user=%s paid_by=%s group=%s amount=%s desc=%s selected=%s",
+                user.id, paid_by, group_id, data.get("amount"), data.get("description"), selected)
 
-    # Require at least one OTHER person
-    others = [uid for uid in selected if uid != user.id]
+    # Require at least one person other than the payer
+    others = [uid for uid in selected if uid != paid_by]
     if not others:
         await query.answer("Select at least one other person to split with!", show_alert=True)
         return MEMBERS
 
     try:
-        expense_id = add_expense(group_id, user.id, data["amount"], data["description"], selected)
+        expense_id = add_expense(group_id, paid_by, data["amount"], data["description"], selected)
     except Exception:
         logger.exception("confirm_add: failed to save expense")
         await query.edit_message_text("❌ Failed to save expense — check the bot logs.")
@@ -160,18 +199,22 @@ async def confirm_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     share = round(data["amount"] / n, 2)
 
     members = {m["user_id"]: m for m in get_members(group_id)}
+    payer = members.get(paid_by)
+    payer_name = (payer["display_name"] or payer["username"] or f"User {paid_by}") if payer else user.full_name
+    payer_name = payer_name.lstrip("@")
+
     other_names = ", ".join(
-        esc(members[uid]["display_name"] or members[uid]["username"] or f"User {uid}")
+        esc((members[uid]["display_name"] or members[uid]["username"] or f"User {uid}").lstrip("@"))
         for uid in others
         if uid in members
     )
 
     text = (
-        f"✅ *{esc(user.full_name)}* paid *{currency}{data['amount']:.2f}* for _{esc(data['description'])}_\n"
+        f"✅ *{esc(payer_name)}* paid *{currency}{data['amount']:.2f}* for _{esc(data['description'])}_\n"
         f"Split {n} ways ({currency}{share:.2f} each)"
     )
     if other_names:
-        text += f"\n→ owes you: {other_names}"
+        text += f"\n→ owes *{esc(payer_name)}*: {other_names}"
 
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🗑️ Delete", callback_data=f"del:{expense_id}")]])
     await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")

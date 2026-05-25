@@ -1,3 +1,1 @@
-@echo off
 watchfiles --filter python "python bot.py"
-pause
